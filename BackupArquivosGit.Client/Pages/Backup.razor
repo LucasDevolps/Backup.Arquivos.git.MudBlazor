@@ -1,0 +1,210 @@
+﻿@page "/backup"
+@using System.Text.RegularExpressions
+@using System.Diagnostics
+
+<MudGrid>
+    <MudItem xs="12" sm="12" md="8" lg="8">
+        <MudCard Class="pa-4">
+            <MudCardHeader>
+                <MudText Typo="Typo.h4">Backup</MudText>
+            </MudCardHeader>
+            <MudCardContent>
+                <MudGrid>
+                    <MudItem xs="12" sm="6">
+                        <MudTextField @bind-Value="caminhoOrigem" Label="Caminho de Origem" Immediate="true" OnBlur="ValidarCaminho" />
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                        @if (caminhoValido)
+                        {
+                            <MudTextField @bind-Value="caminhoDestino" Label="Pasta de Destino do Backup" />
+                        }
+                    </MudItem>
+                </MudGrid>
+                @if (!string.IsNullOrEmpty(mensagemErro))
+                {
+                    <MudAlert Severity="Severity.Error" Class="mt-4">@mensagemErro</MudAlert>
+                }
+                @if (caminhoValido)
+                {
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="IniciarBackup" Disabled="@(string.IsNullOrEmpty(caminhoDestino))" Class="mt-4">
+                        Iniciar Backup
+                    </MudButton>
+                }
+            </MudCardContent>
+        </MudCard>
+
+        @if (!string.IsNullOrEmpty(userName) && !string.IsNullOrEmpty(userEmail))
+        {
+            <MudCard Class="mt-4 pa-4">
+                <MudCardHeader>
+                    <MudText Typo="Typo.h5">Informações do Usuário</MudText>
+                </MudCardHeader>
+                <MudCardContent>
+                    <MudText>
+                        Nome: @userName
+                    </MudText>
+                    <MudText>
+                        Email: @userEmail
+                    </MudText>
+                </MudCardContent>
+            </MudCard>
+        }
+
+        @if (arquivosModificados.Count > 0)
+        {
+            <MudCard Class="mt-4 pa-4">
+                <MudCardHeader>
+                    <MudText Typo="Typo.h5">Arquivos Alterados pelo Autor</MudText>
+                </MudCardHeader>
+                <MudCardContent>
+                    <MudExpansionPanels>
+                        <MudExpansionPanels>
+                            <MudExpansionPanel Text="Ver Arquivos Alterados">
+                                @foreach (var arquivo in arquivosModificados)
+                                {
+                                    <MudCheckBox T="bool" @bind-Checked="arquivo.Selecionado" Label="@arquivo.Nome" />
+                                }
+                            </MudExpansionPanel>
+                        </MudExpansionPanels>
+                    </MudExpansionPanels>
+                </MudCardContent>
+            </MudCard>
+        }
+    </MudItem>
+</MudGrid>
+
+@code {
+    private string caminhoOrigem = string.Empty;
+    private string caminhoDestino = string.Empty;
+    private bool caminhoValido = false;
+    private string mensagemErro = string.Empty;
+    private string userName = string.Empty;
+    private string userEmail = string.Empty;
+
+    private List<ArquivoAlterado> arquivosModificados = new List<ArquivoAlterado>();
+
+    private void ValidarCaminho()
+    {
+        try
+        {
+            string caminhoTratado = caminhoOrigem.Replace(@"\", @"\\").Replace(@"/",@"\\");
+            if (System.IO.Directory.Exists(caminhoTratado))
+            {
+                caminhoValido = true;
+                mensagemErro = string.Empty;
+            }
+            else
+            {
+                caminhoValido = false;
+                mensagemErro = "O caminho de origem não é válido.";
+                ResetarVariaveis();
+            }
+        }
+        catch (Exception ex)
+        {
+            caminhoValido = false;
+            mensagemErro = $"Erro ao validar o caminho: {ex.Message}";
+            ResetarVariaveis();
+        }
+    }
+
+    private void IniciarBackup()
+    {
+        try
+        {
+            string gitConfigPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".gitconfig");
+
+            if (File.Exists(gitConfigPath))
+            {
+                string gitConfigContent = File.ReadAllText(gitConfigPath);
+
+                string userNamePattern = @"\[user\][^\[]*?name\s*=\s*(.+)";
+                string userEmailPattern = @"\[user\][^\[]*?email\s*=\s*(.+)";
+
+                Match nameMatch = Regex.Match(gitConfigContent, userNamePattern);
+                Match emailMatch = Regex.Match(gitConfigContent, userEmailPattern);
+
+                userName = nameMatch.Groups[1].Value.Trim();
+                userEmail = emailMatch.Groups[1].Value.Trim();
+
+                if (string.IsNullOrEmpty(userName) || string.IsNullOrEmpty(userEmail))
+                {
+                    mensagemErro = "As configurações user.name e/ou user.email não foram encontradas.";
+                    ResetarVariaveis();
+                }
+                else
+                {
+                    mensagemErro = string.Empty;
+                    string autor = userName +" <"+userEmail+">";
+                    LerArquivosModificados(autor, caminhoOrigem);
+                }
+            }
+            else
+            {
+                mensagemErro = "Arquivo de configuração do Git não encontrado.";
+                ResetarVariaveis();
+            }
+        }
+        catch (Exception ex)
+        {
+            mensagemErro = $"Erro ao ler as configurações do Git: {ex.Message}";
+            ResetarVariaveis();
+        }
+    }
+    private void LerArquivosModificados(string author, string caminhoOrigem)
+    {
+        try
+        {
+            ProcessStartInfo psi = new ProcessStartInfo
+            {
+                FileName = "git",
+                Arguments = $"-C \"{caminhoOrigem}\" log --author=\"{author}\" --name-only --pretty=format:",
+                RedirectStandardOutput = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+
+            Process process = Process.Start(psi);
+
+            if (process != null)
+            {
+                using (var reader = process.StandardOutput)
+                {
+                    string output = reader.ReadToEnd();
+                    var arquivos = output.Split(new[] { '\n' }, StringSplitOptions.RemoveEmptyEntries);
+
+                    arquivosModificados = arquivos.Select(a => new ArquivoAlterado
+                        {
+                            Nome = Path.GetFileName(a.Trim()), // Aqui pegamos apenas o nome do arquivo
+                            Selecionado = false
+                        }).ToList();
+                }
+
+                process.WaitForExit();
+            }
+        }
+        catch (Exception ex)
+        {
+            mensagemErro = $"Erro ao ler os arquivos modificados: {ex.Message}";
+            ResetarVariaveis();
+        }
+    
+    }
+    private void ResetarVariaveis()
+    {
+        caminhoOrigem = string.Empty;
+        caminhoDestino = string.Empty;
+        caminhoValido = false;
+        userName = string.Empty;
+        userEmail = string.Empty;
+        arquivosModificados.Clear();
+    }
+
+}
+@code{
+    public class ArquivoAlterado
+    {
+        public string Nome { get; set; } = string.Empty;
+        public bool Selecionado { get; set; } = false;
+    }
+}
